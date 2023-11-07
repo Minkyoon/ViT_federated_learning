@@ -1,14 +1,12 @@
 import torch
 from torch import nn, optim
-import torchvision
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, Subset
-import numpy as np
 from transformers import ViTForImageClassification, ViTFeatureExtractor,ViTConfig, ViTForImageClassification
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, Subset
 import torch.nn.functional as F
-
+import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.metrics import confusion_matrix
 import seaborn as sns
@@ -16,6 +14,17 @@ from sklearn.metrics import accuracy_score, roc_auc_score, recall_score, classif
 from scipy.stats import hmean
 
 
+def add_malicious_updates(model, noise_level=0.5,device='cpu'):
+    with torch.no_grad():
+        for param in model.parameters():
+            noise = torch.randn(param.size()).to(device) * noise_level  # 잡음을 올바른 디바이스로 이동
+            param.add_(noise)
+            
+            
+
+def is_malicious(client_id):
+
+    return client_id in malicious_client_ids
 
 device = torch.device("cuda:3" if torch.cuda.is_available() else "cpu")
 
@@ -32,7 +41,8 @@ num_clients = 5
 batch_size = 32
 learning_rate = 1e-3
 num_rounds = 10  
-local_epochs = 10  
+local_epochs = 10
+malicious_client_ids = {0}  # 0번째 클라이언트는 악성
 
 
 
@@ -91,19 +101,14 @@ global_model = global_model.to(device)
 
 
 client_models = [CustomViT().to(device) for _ in range(num_clients)]
-
-
-
-for client_model in client_models:
-    client_model.load_state_dict(global_model.state_dict())
-
+## deepcopy 사용하기
 
 optimizers = [optim.SGD(client_model.parameters(), lr=learning_rate) for client_model in client_models]
+## client class 만들기
 
 loss_fn= nn.CrossEntropyLoss(reduction='sum')
 
 # Training process
-
 
 for round in range(num_rounds):
     client_weights = []
@@ -119,6 +124,11 @@ for round in range(num_rounds):
                 loss.backward()
                 optimizer.step()
             print(f'클라이언트 {client_id}, 에폭 {epoch}')
+         
+        ## add noise in malicious clinets   
+        if is_malicious(client_id):
+            print(f"poison:{client_id}")
+            add_malicious_updates(client_model, noise_level=0.1, device=device)    
 
       
         client_weights.append(client_model.state_dict())
@@ -175,7 +185,7 @@ sns.heatmap(conf_mat, annot=True, fmt='d',
             yticklabels=train_dataset.classes)
 plt.ylabel('Actual')
 plt.xlabel('Predicted')
-plt.savefig('confusion_matrix3.png')
+plt.savefig('confusion_matrix_round10_poison.png')
 
 
 
@@ -195,4 +205,4 @@ with open('model_performance_metrics3.txt', 'w') as f:
     f.write('\nClassification Report:\n')
     f.write(class_report)
 
-print("Metrics saved to model_performance_metrics.txt")
+print("Metrics saved to model_performance_metrics_round10_poison.txt")
