@@ -125,61 +125,50 @@ for round in range(num_rounds):
 
 
 
-
-
-global_model.eval() 
-test_loss = 0
-correct = 0
-with torch.no_grad():
-    for data, target in test_loader:
-        data, target = data.to(device), target.to(device) 
-        output = global_model(data)
-        test_loss += loss_fn(output, target).item()  
-        pred = output.argmax(dim=1, keepdim=True)  
-        correct += pred.eq(target.view_as(pred)).sum().item()
-
-test_loss /= len(test_loader.dataset)
-test_accuracy = 100. * correct / len(test_loader.dataset)
-
-print(f'Test set: Average loss: {test_loss:.4f}, Accuracy: {correct}/{len(test_loader.dataset)} ({test_accuracy:.0f}%)')
-
-
+# 예측값과 실제값을 저장할 리스트 초기화
 y_pred = []
 y_true = []
+
+# 모델을 평가 모드로 설정
 global_model.eval()
+
+# 그라디언트 계산을 비활성화
 with torch.no_grad():
     for data, target in test_loader:
         data = data.to(device)
+        # 모델로부터 예측값을 얻음
         outputs = global_model(data)
+        # 가장 높은 값을 가진 인덱스를 예측값으로 선택
         _, predicted = torch.max(outputs, 1)
         y_pred.extend(predicted.view(-1).cpu().numpy())
         y_true.extend(target.view(-1).cpu().numpy())
 
-# Confusion Matrix 계산
+# 혼동 행렬 계산
 conf_mat = confusion_matrix(y_true, y_pred)
-fig, ax = plt.subplots(figsize=(10,10))
+
+# 혼동 행렬을 시각화
+fig, ax = plt.subplots(figsize=(10, 10))
 sns.heatmap(conf_mat, annot=True, fmt='d',
             xticklabels=train_dataset.classes,
             yticklabels=train_dataset.classes)
-plt.ylabel('Actual')
+plt.ylabel('actual')
 plt.xlabel('Predicted')
-plt.savefig('confusion_matrix.png')
+plt.title('Confusion matrix')
+plt.savefig('confusion_matrix_10_10.png')
 
-
-
-# Sensitivity 
+# 감도(Sensitivity) 계산
 sensitivity = recall_score(y_true, y_pred, average='macro')
 
-# Accuracy 계산
+# 정확도(Accuracy) 계산
 accuracy = accuracy_score(y_true, y_pred)
 
+# 분류 보고서 생성
 class_report = classification_report(y_true, y_pred, target_names=train_dataset.classes)
 
-# 결과를 txt 파일로 저장
-with open('model_performance_metrics.txt', 'w') as f:
-    f.write(f'Accuracy: {accuracy}\n')
-    # f.write(f'ROC AUC Score: {roc_auc}\n') 
-    f.write(f'Sensitivity: {sensitivity}\n')
-    f.write('\nClassification Report:\n')
+# 성능 메트릭스를 텍스트 파일로 저장
+with open('model_performance_metrics_10_10.txt', 'w') as f:
+    f.write(f'정확도(Accuracy): {accuracy:.4f}\n')
+    f.write(f'감도(Sensitivity): {sensitivity:.4f}\n')
+    f.write('\n분류 보고서(Classification Report):\n')
     f.write(class_report)
 

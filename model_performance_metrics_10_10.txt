@@ -1,0 +1,20 @@
+정확도(Accuracy): 0.8697
+감도(Sensitivity): 0.8697
+
+분류 보고서(Classification Report):
+              precision    recall  f1-score   support
+
+ T-shirt/top       0.82      0.80      0.81      1000
+     Trouser       0.99      0.96      0.98      1000
+    Pullover       0.79      0.77      0.78      1000
+       Dress       0.88      0.88      0.88      1000
+        Coat       0.77      0.81      0.79      1000
+      Sandal       0.96      0.95      0.96      1000
+       Shirt       0.66      0.66      0.66      1000
+     Sneaker       0.92      0.95      0.93      1000
+         Bag       0.96      0.96      0.96      1000
+  Ankle boot       0.95      0.95      0.95      1000
+
+    accuracy                           0.87     10000
+   macro avg       0.87      0.87      0.87     10000
+weighted avg       0.87      0.87      0.87     10000
