@@ -14,6 +14,7 @@ from sklearn.metrics import accuracy_score, roc_auc_score, recall_score, classif
 from scipy.stats import hmean
 from client import Client  
 import os
+import random
 
 # Hyperparameters
 num_clients = 5
@@ -21,8 +22,8 @@ batch_size = 32
 learning_rate = 1e-3
 num_rounds = 10  
 local_epochs = 5
-malicious_client_ids = {0,1,2,3,4}  
-poison_status = "gausian_noise_5noise"  
+malicious_client_ids = {}  
+poison_status = "nopoison_100subset"  
 results_folder = "./results"  
 
 # 결과 폴더가 존재하지 않으면 생성
@@ -71,9 +72,18 @@ train_dataset = datasets.FashionMNIST(root='./data', train=True, download=True, 
 test_dataset = datasets.FashionMNIST(root='./data', train=False, download=True, transform=transform)
 
 
-#train dataset을 client수로 분할
-data_size = len(train_dataset) // num_clients
-client_datasets = [Subset(train_dataset, np.arange(i*data_size, (i+1)*data_size)) for i in range(num_clients)]
+# #train dataset을 client수로 분할
+# data_size = len(train_dataset) // num_clients
+# client_datasets = [Subset(train_dataset, np.arange(i*data_size, (i+1)*data_size)) for i in range(num_clients)]
+
+
+# 데이터셋 100개 나눔
+num_subsets = 100
+subset_size = len(train_dataset) // num_subsets
+subsets = [Subset(train_dataset, np.arange(i*subset_size, (i+1)*subset_size)) for i in range(num_subsets)]
+
+# 클라이언트 서브셋 선택
+selected_subsets = random.sample(subsets, num_clients)
 
 
 # 글로벌 모델 선언
@@ -81,7 +91,7 @@ global_model =  CustomViT().to(device)
 global_optimizer = optim.SGD(global_model.parameters(), lr=learning_rate)
 
 clients = [Client(client_id=i, 
-                  dataset=client_datasets[i], 
+                  dataset=selected_subsets[i], 
                   model=CustomViT().to(device), 
                   lr=learning_rate,
                   loss_fn=nn.CrossEntropyLoss(reduction='sum'), 

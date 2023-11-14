@@ -11,7 +11,7 @@ def add_malicious_updates(model, noise_level=0.5, device='cpu'):
 
 
 def gaussian_attack(model, noise_level=0.1, device='cpu'):
-    with torch.no_grad():  
+    with torch.no_gr0ad():  
         for param in model.parameters():
             if param.requires_grad:
                 norm = param.grad.norm()
