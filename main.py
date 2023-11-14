@@ -71,9 +71,18 @@ train_dataset = datasets.FashionMNIST(root='./data', train=True, download=True, 
 test_dataset = datasets.FashionMNIST(root='./data', train=False, download=True, transform=transform)
 
 
-#train dataset을 client수로 분할
-data_size = len(train_dataset) // num_clients
-client_datasets = [Subset(train_dataset, np.arange(i*data_size, (i+1)*data_size)) for i in range(num_clients)]
+# #train dataset을 client수로 분할
+# data_size = len(train_dataset) // num_clients
+# client_datasets = [Subset(train_dataset, np.arange(i*data_size, (i+1)*data_size)) for i in range(num_clients)]
+
+
+# 데이터셋 100개 나눔
+num_subsets = 100
+subset_size = len(train_dataset) // num_subsets
+subsets = [Subset(train_dataset, np.arange(i*subset_size, (i+1)*subset_size)) for i in range(num_subsets)]
+
+# 클라이언트 서브셋 선택
+selected_subsets = np.random.choice(subsets, num_clients, replace=False)
 
 
 # 글로벌 모델 선언
@@ -81,7 +90,7 @@ global_model =  CustomViT().to(device)
 global_optimizer = optim.SGD(global_model.parameters(), lr=learning_rate)
 
 clients = [Client(client_id=i, 
-                  dataset=client_datasets[i], 
+                  dataset=selected_subsets[i], 
                   model=CustomViT().to(device), 
                   lr=learning_rate,
                   loss_fn=nn.CrossEntropyLoss(reduction='sum'), 
