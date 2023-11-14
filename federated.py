@@ -12,6 +12,10 @@ from sklearn.metrics import confusion_matrix
 import seaborn as sns
 from sklearn.metrics import accuracy_score, roc_auc_score, recall_score, classification_report
 from scipy.stats import hmean
+import os
+
+
+
 
 
 def add_malicious_updates(model, noise_level=0.5,device='cpu'):
@@ -42,7 +46,17 @@ batch_size = 32
 learning_rate = 1e-3
 num_rounds = 10  
 local_epochs = 10
-malicious_client_ids = {0}  # 0번째 클라이언트는 악성
+malicious_client_ids = {0}  
+poison_status = "mean"  
+results_folder = "./results"  
+
+# 결과 폴더가 존재하지 않으면 생성
+if not os.path.exists(results_folder):
+    os.makedirs(results_folder)
+
+# 모델 성능 메트릭스 파일명 설정
+metrics_filename = f'model_performance_metrics_round{num_rounds}_{poison_status}.txt'
+conf_matrix_filename = f'confusion_matrix_round{num_rounds}_{poison_status}.png'
 
 
 
@@ -185,7 +199,7 @@ sns.heatmap(conf_mat, annot=True, fmt='d',
             yticklabels=train_dataset.classes)
 plt.ylabel('Actual')
 plt.xlabel('Predicted')
-plt.savefig('confusion_matrix_round10_poison.png')
+plt.savefig(os.path.join(results_folder, conf_matrix_filename))
 
 
 
@@ -198,7 +212,7 @@ accuracy = accuracy_score(y_true, y_pred)
 class_report = classification_report(y_true, y_pred, target_names=train_dataset.classes)
 
 # 결과를 txt 파일로 저장
-with open('model_performance_metrics3.txt', 'w') as f:
+with open(os.path.join(results_folder, metrics_filename), 'w') as f:
     f.write(f'Accuracy: {accuracy}\n')
     # f.write(f'ROC AUC Score: {roc_auc}\n') 
     f.write(f'Sensitivity: {sensitivity}\n')

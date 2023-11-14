@@ -7,6 +7,25 @@ def add_malicious_updates(model, noise_level=0.5, device='cpu'):
         for param in model.parameters():
             noise = torch.randn(param.size()).to(device) * noise_level
             param.add_(noise)
+            
+
+
+def gaussian_attack(model, noise_level=0.1, device='cpu'):
+    with torch.no_grad():  
+        for param in model.parameters():
+            if param.requires_grad:
+                norm = param.grad.norm()
+                noise = torch.randn_like(param.grad) * noise_level
+                param.grad += noise * (norm / noise.norm())
+                
+                
+def mean_attack(model):
+    with torch.no_grad():  #
+        for param in model.parameters():
+            if param.requires_grad:
+                param.grad.data = -param.grad.data
+            
+
 
 class Client:
     def __init__(self, client_id, dataset, model, lr, loss_fn, device, malicious_client_ids):
@@ -35,6 +54,7 @@ class Client:
         # 악성 클라이언트일 경우 추가 업데이트 수행
         if self.is_malicious:
             print(f"poison:{self.client_id}")
-            add_malicious_updates(self.model, noise_level=0.1, device=self.device)
+            gaussian_attack(self.model, noise_level=20, device='cpu')
+
         
         return self.model.state_dict()

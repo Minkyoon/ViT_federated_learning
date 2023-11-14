@@ -13,14 +13,25 @@ import seaborn as sns
 from sklearn.metrics import accuracy_score, roc_auc_score, recall_score, classification_report
 from scipy.stats import hmean
 from client import Client  
+import os
 
 # Hyperparameters
 num_clients = 5
 batch_size = 32
 learning_rate = 1e-3
 num_rounds = 10  
-local_epochs = 10
-malicious_client_ids = {}  # 0번째 클라이언트는 악성
+local_epochs = 5
+malicious_client_ids = {0,1,2,3,4}  
+poison_status = "gausian_noise_5noise"  
+results_folder = "./results"  
+
+# 결과 폴더가 존재하지 않으면 생성
+if not os.path.exists(results_folder):
+    os.makedirs(results_folder)
+
+# 모델 성능 메트릭스 파일명 설정
+metrics_filename = f'model_performance_metrics_round{num_rounds}_epoch{local_epochs}_{poison_status}.txt'
+conf_matrix_filename = f'confusion_matrix_round{num_rounds}_{local_epochs}_{poison_status}.png'
 
 
 device = torch.device("cuda:3" if torch.cuda.is_available() else "cpu")
@@ -154,7 +165,7 @@ sns.heatmap(conf_mat, annot=True, fmt='d',
 plt.ylabel('actual')
 plt.xlabel('Predicted')
 plt.title('Confusion matrix')
-plt.savefig('confusion_matrix_10_10.png')
+plt.savefig(os.path.join(results_folder, conf_matrix_filename))
 
 # 감도(Sensitivity) 계산
 sensitivity = recall_score(y_true, y_pred, average='macro')
@@ -166,7 +177,7 @@ accuracy = accuracy_score(y_true, y_pred)
 class_report = classification_report(y_true, y_pred, target_names=train_dataset.classes)
 
 # 성능 메트릭스를 텍스트 파일로 저장
-with open('model_performance_metrics_10_10.txt', 'w') as f:
+with open(os.path.join(results_folder, metrics_filename), 'w') as f:
     f.write(f'정확도(Accuracy): {accuracy:.4f}\n')
     f.write(f'감도(Sensitivity): {sensitivity:.4f}\n')
     f.write('\n분류 보고서(Classification Report):\n')
