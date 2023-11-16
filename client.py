@@ -24,7 +24,36 @@ def mean_attack(model):
         for param in model.parameters():
             if param.requires_grad:
                 param.grad.data = -param.grad.data
+                
+def partial_trim_attack(global_weights, f):
+    # f: 손상된 클라이언트의 수
+    # 손상된 클라이언트의 가중치만 선택
+    malicious_weights = global_weights[:f]
+
+    # 손상된 클라이언트의 가중치에 대한 평균과 표준편차 계산
+    mean_weights = {key: torch.mean(torch.stack([weights[key] for weights in malicious_weights]), dim=0) for key in global_weights[0]}
+    std_weights = {key: torch.std(torch.stack([weights[key] for weights in malicious_weights]), dim=0, unbiased=False) for key in global_weights[0]}
+
+    # 공격 적용: 손상된 클라이언트의 가중치에만 공격 적용
+    attacked_weights = []
+    for weights in malicious_weights:
+        attacked_weight = {key: weights[key] - 3.5 * std_weights[key] * torch.sign(mean_weights[key]) for key in weights}
+        attacked_weights.append(attacked_weight)
+
+    # 공격이 적용된 가중치와 나머지 클라이언트의 가중치를 결합
+    return attacked_weights + global_weights[f:]
             
+def full_trim_attack(global_weights, f):
+    # f: 손상된 클라이언트의 수
+    # 가중치 평균과 표준편차 계산
+    mean_weights = {key: torch.mean(torch.stack([weights[key] for weights in global_weights]), dim=0) for key in global_weights[0]}
+    std_weights = {key: torch.std(torch.stack([weights[key] for weights in global_weights]), dim=0, unbiased=False) for key in global_weights[0]}
+
+    # 공격 적용
+    for key in mean_weights.keys():
+        mean_weights[key] = mean_weights[key] - 3.5 * std_weights[key] * torch.sign(mean_weights[key])
+
+    return mean_weights
 
 
 class Client:

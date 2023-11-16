@@ -12,33 +12,26 @@ from sklearn.metrics import confusion_matrix
 import seaborn as sns
 from sklearn.metrics import accuracy_score, roc_auc_score, recall_score, classification_report
 from scipy.stats import hmean
-from client import Client  
+from client import Client, partial_trim_attack, full_trim_attack  
 import os
 import random
 
 
-def full_trim_attack(global_weights, f):
-    # f: 손상된 클라이언트의 수
-    # 가중치 평균과 표준편차 계산
-    mean_weights = {key: torch.mean(torch.stack([weights[key] for weights in global_weights]), dim=0) for key in global_weights[0]}
-    std_weights = {key: torch.std(torch.stack([weights[key] for weights in global_weights]), dim=0, unbiased=False) for key in global_weights[0]}
 
-    # 공격 적용
-    for key in mean_weights.keys():
-        mean_weights[key] = mean_weights[key] - 3.5 * std_weights[key] * torch.sign(mean_weights[key])
 
-    return mean_weights
+
 
 
 # Hyperparameters
-num_clients = 5
+num_clients = 10
 batch_size = 32
 learning_rate = 1e-3
-num_rounds = 10  
+num_rounds = 30  
 local_epochs = 5
 malicious_client_ids = {}  
-poison_status = "gausian_noise_5noise"  
+poison_status = "trim_attack_sumsetmore"  
 results_folder = "./results"  
+enable_attack = False
 
 # 결과 폴더가 존재하지 않으면 생성
 if not os.path.exists(results_folder):
@@ -92,7 +85,7 @@ test_dataset = datasets.FashionMNIST(root='./data', train=False, download=True, 
 
 
 # 데이터셋 100개 나눔
-num_subsets = 100
+num_subsets = 25
 subset_size = len(train_dataset) // num_subsets
 subsets = [Subset(train_dataset, np.arange(i*subset_size, (i+1)*subset_size)) for i in range(num_subsets)]
 
@@ -134,7 +127,20 @@ for round in range(num_rounds):
         global_weights.append(client_state_dict)
     
     # 글로벌 모델 가중치 업데이트
-    new_global_state_dict = full_trim_attack(global_weights, f=2)
+    if enable_attack:
+        # partial_trim 공격 적용
+        attacked_global_weights = partial_trim_attack(global_weights, f=4)
+        new_global_state_dict = {key: torch.mean(
+            torch.stack([weights[key] for weights in attacked_global_weights]), dim=0)
+            for key in attacked_global_weights[0]}
+    else:
+        # 공격 없이 평균만 계산
+        new_global_state_dict = {key: torch.mean(
+            torch.stack([weights[key] for weights in global_weights]), dim=0)
+            for key in global_weights[0]}
+    
+   
+
     
     global_model.load_state_dict(new_global_state_dict)
 
