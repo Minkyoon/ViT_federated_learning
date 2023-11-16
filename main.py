@@ -14,6 +14,21 @@ from sklearn.metrics import accuracy_score, roc_auc_score, recall_score, classif
 from scipy.stats import hmean
 from client import Client  
 import os
+import random
+
+
+def full_trim_attack(global_weights, f):
+    # f: 손상된 클라이언트의 수
+    # 가중치 평균과 표준편차 계산
+    mean_weights = {key: torch.mean(torch.stack([weights[key] for weights in global_weights]), dim=0) for key in global_weights[0]}
+    std_weights = {key: torch.std(torch.stack([weights[key] for weights in global_weights]), dim=0, unbiased=False) for key in global_weights[0]}
+
+    # 공격 적용
+    for key in mean_weights.keys():
+        mean_weights[key] = mean_weights[key] - 3.5 * std_weights[key] * torch.sign(mean_weights[key])
+
+    return mean_weights
+
 
 # Hyperparameters
 num_clients = 5
@@ -21,7 +36,7 @@ batch_size = 32
 learning_rate = 1e-3
 num_rounds = 10  
 local_epochs = 5
-malicious_client_ids = {0,1,2,3,4}  
+malicious_client_ids = {}  
 poison_status = "gausian_noise_5noise"  
 results_folder = "./results"  
 
@@ -34,7 +49,7 @@ metrics_filename = f'model_performance_metrics_round{num_rounds}_epoch{local_epo
 conf_matrix_filename = f'confusion_matrix_round{num_rounds}_{local_epochs}_{poison_status}.png'
 
 
-device = torch.device("cuda:3" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 
 
 #transform
@@ -82,7 +97,7 @@ subset_size = len(train_dataset) // num_subsets
 subsets = [Subset(train_dataset, np.arange(i*subset_size, (i+1)*subset_size)) for i in range(num_subsets)]
 
 # 클라이언트 서브셋 선택
-selected_subsets = np.random.choice(subsets, num_clients, replace=False)
+selected_subsets = random.sample(subsets, num_clients)
 
 
 # 글로벌 모델 선언
@@ -119,9 +134,7 @@ for round in range(num_rounds):
         global_weights.append(client_state_dict)
     
     # 글로벌 모델 가중치 업데이트
-    new_global_state_dict = {key: torch.mean(
-        torch.stack([client_weights[key] for client_weights in global_weights]), dim=0)
-        for key in global_weights[0]}
+    new_global_state_dict = full_trim_attack(global_weights, f=2)
     
     global_model.load_state_dict(new_global_state_dict)
 
