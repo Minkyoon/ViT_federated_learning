@@ -14,6 +14,7 @@ from sklearn.metrics import accuracy_score, roc_auc_score, recall_score, classif
 from scipy.stats import hmean
 from client import Client  
 import os
+import random
 
 # Hyperparameters
 num_clients = 5
@@ -21,8 +22,8 @@ batch_size = 32
 learning_rate = 1e-3
 num_rounds = 10  
 local_epochs = 5
-malicious_client_ids = {0,1,2,3,4}  
-poison_status = "gausian_noise_5noise"  
+malicious_client_ids = {0,1}  
+poison_status = "trim_real"  
 results_folder = "./results"  
 
 # 결과 폴더가 존재하지 않으면 생성
@@ -34,7 +35,7 @@ metrics_filename = f'model_performance_metrics_round{num_rounds}_epoch{local_epo
 conf_matrix_filename = f'confusion_matrix_round{num_rounds}_{local_epochs}_{poison_status}.png'
 
 
-device = torch.device("cuda:3" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 
 
 #transform
@@ -82,7 +83,7 @@ subset_size = len(train_dataset) // num_subsets
 subsets = [Subset(train_dataset, np.arange(i*subset_size, (i+1)*subset_size)) for i in range(num_subsets)]
 
 # 클라이언트 서브셋 선택
-selected_subsets = np.random.choice(subsets, num_clients, replace=False)
+selected_subsets = random.sample(subsets, num_clients)
 
 
 # 글로벌 모델 선언
@@ -113,21 +114,15 @@ loss_fn=nn.CrossEntropyLoss(reduction='sum')
 for round in range(num_rounds):
     global_weights = []
 
-    # 클라이언트별로 훈련 진행
-    for client in clients:
-        client_state_dict = client.train(local_epochs)
-        global_weights.append(client_state_dict)
-    
-    # 글로벌 모델 가중치 업데이트
-    new_global_state_dict = {key: torch.mean(
-        torch.stack([client_weights[key] for client_weights in global_weights]), dim=0)
-        for key in global_weights[0]}
-    
-    global_model.load_state_dict(new_global_state_dict)
-
-    # 클라이언트 모델들을 글로벌 모델로 업데이트
+    # 클라이언트별로 훈련 진행 및 가중치 수집
     for client in clients:
         client.model.load_state_dict(global_model.state_dict())
+        client_state_dict = client.train(local_epochs)
+        global_weights.append(client_state_dict)
+
+    # 글로벌 모델 가중치 업데이트
+    new_global_state_dict = {key: torch.mean(torch.stack([client_weights[key] for client_weights in global_weights]), dim=0) for key in global_weights[0]}
+    global_model.load_state_dict(new_global_state_dict)
 
     # 테스트셋으로 평가
     global_model.eval()

@@ -24,6 +24,18 @@ def mean_attack(model):
         for param in model.parameters():
             if param.requires_grad:
                 param.grad.data = -param.grad.data
+                
+def partial_trim_attack(self):
+        # 손상된 클라이언트의 그래디언트에 대한 평균과 표준편차 계산
+        grads = [param.grad for param in self.model.parameters() if param.requires_grad]
+        mean_grads = torch.mean(torch.stack(grads), dim=0)
+        std_grads = torch.std(torch.stack(grads), dim=0, unbiased=False)
+
+        # 그래디언트 조작
+        with torch.no_grad():
+            for param in self.model.parameters():
+                if param.requires_grad:
+                    param.grad -= 3.5 * std_grads * torch.sign(mean_grads)
             
 
 
@@ -48,13 +60,25 @@ class Client:
                 output = self.model(data)
                 loss = self.loss_fn(output, target)
                 loss.backward()
+                if self.is_malicious:
+                    self.partial_trim_attack()
+
                 self.optimizer.step()
             print(f'클라이언트 {self.client_id}, 에폭 {epoch}')
-        
-        # 악성 클라이언트일 경우 추가 업데이트 수행
-        if self.is_malicious:
-            print(f"poison:{self.client_id}")
-            gaussian_attack(self.model, noise_level=20, device='cpu')
+            
+        return self.model.state_dict()
+            
+    def partial_trim_attack(self):
+        with torch.no_grad():
+            flattened_grads = [param.grad.view(-1) for param in self.model.parameters() if param.requires_grad]
+            
+
+            all_grads = torch.cat(flattened_grads)  
+            mean_grads = torch.mean(all_grads)
+            std_grads = torch.std(all_grads)
+
+            for param in self.model.parameters():
+                if param.requires_grad:
+                    param.grad -= 3.5 * std_grads * torch.sign(mean_grads)
 
         
-        return self.model.state_dict()
