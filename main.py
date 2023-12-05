@@ -4,7 +4,8 @@ from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, Subset
 from transformers import ViTForImageClassification, ViTFeatureExtractor,ViTConfig, ViTForImageClassification
 from torchvision import datasets, transforms
-from torch.utils.data import DataLoader, Subset
+from torchvision.datasets import ImageFolder
+from torch.utils.data import DataLoader, Subset,random_split
 import torch.nn.functional as F
 import numpy as np
 import matplotlib.pyplot as plt
@@ -12,30 +13,49 @@ from sklearn.metrics import confusion_matrix
 import seaborn as sns
 from sklearn.metrics import accuracy_score, roc_auc_score, recall_score, classification_report
 from scipy.stats import hmean
-from client import Client, partial_trim_attack, full_trim_attack  
+from client import Client, Server, split_dataset_by_class  
 import os
 import random
+from transformers import ViTForImageClassification
+from sklearn.model_selection import train_test_split
+import copy
 
 
 
 
+class CustomViTWithPrompt(nn.Module):
+    def __init__(self, num_labels, num_prompts):
+        super(CustomViTWithPrompt, self).__init__()
+        configuration = ViTConfig.from_pretrained('google/vit-base-patch16-224', num_labels=num_labels)
+        self.vit = ViTForImageClassification(configuration)
+        self.prompts = nn.Parameter(torch.randn(num_prompts, configuration.hidden_size))
+        self.freeze_vit_parameters()
 
+    def freeze_vit_parameters(self):
+        for param in self.vit.parameters():
+            param.requires_grad = False
+        for param in self.vit.classifier.parameters():
+            param.requires_grad = True
 
+    def forward(self, pixel_values):
+        embeddings = self.vit.vit.embeddings(pixel_values)
+        extended_embeddings = torch.cat([embeddings[:, 0:1], self.prompts.unsqueeze(0).expand(embeddings.size(0), -1, -1), embeddings[:, 1:]], dim=1)
+        outputs = self.vit.vit.encoder(extended_embeddings)
+        logits = self.vit.classifier(outputs[0][:, 0])
+        return logits
+    
 
 # Hyperparameters
-num_clients = 10
+num_clients = 5
 batch_size = 32
 learning_rate = 1e-3
-num_rounds = 30  
+num_rounds = 50  
 local_epochs = 5
-malicious_client_ids = {}  
-poison_status = "trim_attack_sumsetmore"  
-results_folder = "./results"  
-enable_attack = False
+malicious_client_ids = {0,1}  
+poison_status = "trim_real"  
+ 
 
-# 결과 폴더가 존재하지 않으면 생성
-if not os.path.exists(results_folder):
-    os.makedirs(results_folder)
+
 
 # 모델 성능 메트릭스 파일명 설정
 metrics_filename = f'model_performance_metrics_round{num_rounds}_epoch{local_epochs}_{poison_status}.txt'
@@ -45,66 +65,46 @@ conf_matrix_filename = f'confusion_matrix_round{num_rounds}_{local_epochs}_{pois
 device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 
 
-#transform
+
 transform = transforms.Compose([
-    transforms.Resize((28, 28)),  
-    transforms.ToTensor(),
+    transforms.Resize((224, 224)),  # ViT에 맞는 크기 조정
+    transforms.ToTensor(),          # 이미지를 PyTorch 텐서로 변환
+    # 추가적인 변환들을 여기에 포함시킬 수 있습니다.
 ])
 
 
-# ViT 모델 정의
-class CustomViT(nn.Module):
-    def __init__(self, num_labels=10):
-        super(CustomViT, self).__init__()
-        configuration = ViTConfig(
-            image_size=28,
-            patch_size=7,
-            num_channels=1,
-            num_labels=num_labels,
-            hidden_size=256,   
-            num_hidden_layers=4,   
-            num_attention_heads=8,
-            intermediate_size=512  
-        )
-        self.vit = ViTForImageClassification(configuration)
 
-    def forward(self, pixel_values):
-        outputs = self.vit(pixel_values=pixel_values)
-        return outputs.logits
+
+
+
 
 
 
 # 데이터셋 정의
-train_dataset = datasets.FashionMNIST(root='./data', train=True, download=True, transform=transform)
-test_dataset = datasets.FashionMNIST(root='./data', train=False, download=True, transform=transform)
+dataset_path = '/home/minkyoon/2023_federated/ViT_federated_learning/data/CUB_200_2011/images'
+original_dataset = ImageFolder(root=dataset_path, transform=transform)
 
+# 데이터셋 분할
+train_dataset, valid_dataset, test_dataset = split_dataset_by_class(original_dataset, train_ratio=0.7, valid_ratio=0.1)
 
-# #train dataset을 client수로 분할
-# data_size = len(train_dataset) // num_clients
-# client_datasets = [Subset(train_dataset, np.arange(i*data_size, (i+1)*data_size)) for i in range(num_clients)]
+# 클라이언트별 데이터셋 분할
 
-
-# 데이터셋 100개 나눔
-num_subsets = 25
-subset_size = len(train_dataset) // num_subsets
-subsets = [Subset(train_dataset, np.arange(i*subset_size, (i+1)*subset_size)) for i in range(num_subsets)]
+client_datasets = random_split(train_dataset, [len(train_dataset) // num_clients + (1 if x < len(train_dataset) % num_clients else 0) for x in range(num_clients)])
 
 # 클라이언트 서브셋 선택
-selected_subsets = random.sample(subsets, num_clients)
+selected_subsets = random.sample(client_datasets, num_clients)
+
+class_names = original_dataset.classes
+
+global_model = CustomViTWithPrompt(num_labels=200, num_prompts=50).to(device)
+server = Server(global_model)
+
+# Assuming you have a way to split your dataset into subsets for each client
 
 
-# 글로벌 모델 선언
-global_model =  CustomViT().to(device)
-global_optimizer = optim.SGD(global_model.parameters(), lr=learning_rate)
+clients = [Client(i, selected_subsets[i], copy.deepcopy(CustomViTWithPrompt(num_labels=200, num_prompts=50)).to(device), lr=1e-3, loss_fn=nn.CrossEntropyLoss(), device=device) for i in range(num_clients)]
 
-clients = [Client(client_id=i, 
-                  dataset=selected_subsets[i], 
-                  model=CustomViT().to(device), 
-                  lr=learning_rate,
-                  loss_fn=nn.CrossEntropyLoss(reduction='sum'), 
-                  device=device,
-                  malicious_client_ids= malicious_client_ids)
-           for i in range(num_clients)]
+
 
 test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
@@ -118,96 +118,67 @@ loss_fn=nn.CrossEntropyLoss(reduction='sum')
 
 
 # 훈련 루프
+# 각 라운드별 성능 평가를 위한 리스트
+round_accuracies = []
+results_folder = './results/results_50prompts_split_iid_localepoch5_true'
+accuracy_log_filename = os.path.join(results_folder, 'round_accuracies.txt')
+
+if not os.path.exists(results_folder):
+    os.makedirs(results_folder)
+
 for round in range(num_rounds):
-    global_weights = []
+    client_updates = [client.train(epochs=local_epochs) for client in clients]
+    avg_prompts, avg_classifier = server.aggregate(client_updates)
+    server.distribute_model(clients, avg_prompts, avg_classifier)
 
-    # 클라이언트별로 훈련 진행
-    for client in clients:
-        client_state_dict = client.train(local_epochs)
-        global_weights.append(client_state_dict)
-    
-    # 글로벌 모델 가중치 업데이트
-    if enable_attack:
-        # partial_trim 공격 적용
-        attacked_global_weights = partial_trim_attack(global_weights, f=4)
-        new_global_state_dict = {key: torch.mean(
-            torch.stack([weights[key] for weights in attacked_global_weights]), dim=0)
-            for key in attacked_global_weights[0]}
-    else:
-        # 공격 없이 평균만 계산
-        new_global_state_dict = {key: torch.mean(
-            torch.stack([weights[key] for weights in global_weights]), dim=0)
-            for key in global_weights[0]}
-    
-   
-
-    
-    global_model.load_state_dict(new_global_state_dict)
-
-    # 클라이언트 모델들을 글로벌 모델로 업데이트
-    for client in clients:
-        client.model.load_state_dict(global_model.state_dict())
-
-    # 테스트셋으로 평가
+    # 글로벌 모델 성능 평가 (정확도만 계산)
     global_model.eval()
     correct = 0
     total = 0
+    y_pred = []
+    y_true = []
     with torch.no_grad():
         for data, target in test_loader:
             data, target = data.to(device), target.to(device)
             outputs = global_model(data)
-            _, predicted = torch.max(outputs.data, 1)
+            _, predicted = torch.max(outputs, 1)
             total += target.size(0)
             correct += (predicted == target).sum().item()
+            y_pred.extend(predicted.view(-1).cpu().numpy())
+            y_true.extend(target.view(-1).cpu().numpy())
     
-    print(f'Round {round}: Accuracy on test set: {100 * correct / total:.2f}%')
+    accuracy = 100 * correct / total
+    print(f'Round {round}: Accuracy on test set: {accuracy:.2f}%')
+
+    with open(accuracy_log_filename, 'a') as log_file:
+        log_file.write(f'Round {round}: Accuracy on test set: {accuracy:.2f}%\n')
+    
 
 
-
-# 예측값과 실제값을 저장할 리스트 초기화
-y_pred = []
-y_true = []
-
-# 모델을 평가 모드로 설정
-global_model.eval()
-
-# 그라디언트 계산을 비활성화
-with torch.no_grad():
-    for data, target in test_loader:
-        data = data.to(device)
-        # 모델로부터 예측값을 얻음
-        outputs = global_model(data)
-        # 가장 높은 값을 가진 인덱스를 예측값으로 선택
-        _, predicted = torch.max(outputs, 1)
-        y_pred.extend(predicted.view(-1).cpu().numpy())
-        y_true.extend(target.view(-1).cpu().numpy())
-
-# 혼동 행렬 계산
+# 마지막 라운드의 혼동 행렬 및 기타 메트릭스 계산
 conf_mat = confusion_matrix(y_true, y_pred)
-
-# 혼동 행렬을 시각화
-fig, ax = plt.subplots(figsize=(10, 10))
-sns.heatmap(conf_mat, annot=True, fmt='d',
-            xticklabels=train_dataset.classes,
-            yticklabels=train_dataset.classes)
-plt.ylabel('actual')
-plt.xlabel('Predicted')
-plt.title('Confusion matrix')
-plt.savefig(os.path.join(results_folder, conf_matrix_filename))
-
-# 감도(Sensitivity) 계산
 sensitivity = recall_score(y_true, y_pred, average='macro')
+class_report = classification_report(y_true, y_pred, target_names=class_names)
 
-# 정확도(Accuracy) 계산
-accuracy = accuracy_score(y_true, y_pred)
+# 혼동 행렬 시각화 및 저장
+conf_matrix_filename = 'confusion_matrix.png'
+fig, ax = plt.subplots(figsize=(10, 10))
+sns.heatmap(conf_mat, annot=True, fmt='d', xticklabels=class_names, yticklabels=class_names)
+plt.ylabel('Actual')
+plt.xlabel('Predicted')
+plt.title('Confusion Matrix')
+plt.savefig(os.path.join(results_folder, conf_matrix_filename))
+plt.close(fig)
 
-# 분류 보고서 생성
-class_report = classification_report(y_true, y_pred, target_names=train_dataset.classes)
-
-# 성능 메트릭스를 텍스트 파일로 저장
+# 성능 메트릭스 저장
+metrics_filename = 'performance_metrics.txt'
 with open(os.path.join(results_folder, metrics_filename), 'w') as f:
-    f.write(f'정확도(Accuracy): {accuracy:.4f}\n')
-    f.write(f'감도(Sensitivity): {sensitivity:.4f}\n')
-    f.write('\n분류 보고서(Classification Report):\n')
+    f.write(f'Accuracy: {accuracy:.4f}\n')
+    f.write(f'Sensitivity: {sensitivity:.4f}\n')
+    f.write('\nClassification Report:\n')
     f.write(class_report)
 
+
+# 최종 모델 저장
+model_save_path = os.path.join(results_folder, 'final_model.pth')
+torch.save(global_model.state_dict(), model_save_path)

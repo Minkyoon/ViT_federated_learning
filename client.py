@@ -1,75 +1,48 @@
 import torch
 from torch.utils.data import DataLoader
-
-# 기존의 add_malicious_updates 함수 정의 유지
-def add_malicious_updates(model, noise_level=0.5, device='cpu'):
-    with torch.no_grad():
-        for param in model.parameters():
-            noise = torch.randn(param.size()).to(device) * noise_level
-            param.add_(noise)
-            
+from sklearn.model_selection import train_test_split
+from torch.utils.data import DataLoader, Subset
+import copy
 
 
-def gaussian_attack(model, noise_level=0.1, device='cpu'):
-    with torch.no_grad():  
-        for param in model.parameters():
-            if param.requires_grad:
-                norm = param.grad.norm()
-                noise = torch.randn_like(param.grad) * noise_level
-                param.grad += noise * (norm / noise.norm())
-                
-                
-def mean_attack(model):
-    with torch.no_grad():  #
-        for param in model.parameters():
-            if param.requires_grad:
-                param.grad.data = -param.grad.data
-                
-def partial_trim_attack(global_weights, f):
-    # f: 손상된 클라이언트의 수
-    # 손상된 클라이언트의 가중치만 선택
-    malicious_weights = global_weights[:f]
 
-    # 손상된 클라이언트의 가중치에 대한 평균과 표준편차 계산
-    mean_weights = {key: torch.mean(torch.stack([weights[key] for weights in malicious_weights]), dim=0) for key in global_weights[0]}
-    std_weights = {key: torch.std(torch.stack([weights[key] for weights in malicious_weights]), dim=0, unbiased=False) for key in global_weights[0]}
+def split_dataset_by_class(dataset, train_ratio, valid_ratio):
+    # 클래스별로 데이터를 분할
+    class_indices = {}
+    for idx, (_, label) in enumerate(dataset):
+        if label not in class_indices:
+            class_indices[label] = []
+        class_indices[label].append(idx)
 
-    # 공격 적용: 손상된 클라이언트의 가중치에만 공격 적용
-    attacked_weights = []
-    for weights in malicious_weights:
-        attacked_weight = {key: weights[key] - 3.5 * std_weights[key] * torch.sign(mean_weights[key]) for key in weights}
-        attacked_weights.append(attacked_weight)
+    # 각 클래스별로 훈련, 검증, 테스트 세트로 분할
+    train_indices, valid_indices, test_indices = [], [], []
+    for label, indices in class_indices.items():
+        train_idx, test_idx = train_test_split(indices, train_size=train_ratio + valid_ratio, random_state=42)
+        valid_idx, test_idx = train_test_split(test_idx, train_size=valid_ratio / (1 - train_ratio - valid_ratio), random_state=42)
+        train_indices.extend(train_idx)
+        valid_indices.extend(valid_idx)
+        test_indices.extend(test_idx)
 
-    # 공격이 적용된 가중치와 나머지 클라이언트의 가중치를 결합
-    return attacked_weights + global_weights[f:]
-            
-def full_trim_attack(global_weights, f):
-    # f: 손상된 클라이언트의 수
-    # 가중치 평균과 표준편차 계산
-    mean_weights = {key: torch.mean(torch.stack([weights[key] for weights in global_weights]), dim=0) for key in global_weights[0]}
-    std_weights = {key: torch.std(torch.stack([weights[key] for weights in global_weights]), dim=0, unbiased=False) for key in global_weights[0]}
+    # 분할된 인덱스를 사용하여 Subset 생성
+    train_subset = Subset(dataset, train_indices)
+    valid_subset = Subset(dataset, valid_indices)
+    test_subset = Subset(dataset, test_indices)
 
-    # 공격 적용
-    for key in mean_weights.keys():
-        mean_weights[key] = mean_weights[key] - 3.5 * std_weights[key] * torch.sign(mean_weights[key])
-
-    return mean_weights
+    return train_subset, valid_subset, test_subset                
 
 
 class Client:
-    def __init__(self, client_id, dataset, model, lr, loss_fn, device, malicious_client_ids):
+    def __init__(self, client_id, dataset, model, lr, loss_fn, device):
         self.client_id = client_id
         self.dataset = dataset
         self.model = model
-        self.optimizer = torch.optim.SGD(self.model.parameters(), lr=lr)
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
         self.loss_fn = loss_fn
         self.loader = DataLoader(dataset, batch_size=32, shuffle=True)
         self.device = device
-        self.malicious_ids = malicious_client_ids
-        self.is_malicious = client_id in malicious_client_ids  
 
     def train(self, epochs):
-        self.model.train()  
+        self.model.train()
         for epoch in range(epochs):
             for data, target in self.loader:
                 data, target = data.to(self.device), target.to(self.device)
@@ -78,12 +51,41 @@ class Client:
                 loss = self.loss_fn(output, target)
                 loss.backward()
                 self.optimizer.step()
-            print(f'클라이언트 {self.client_id}, 에폭 {epoch}')
-        
-        # 악성 클라이언트일 경우 추가 업데이트 수행
-        if self.is_malicious:
-            print(f"poison:{self.client_id}")
-            gaussian_attack(self.model, noise_level=20, device='cpu')
 
+        return self.model.prompts.data, self.model.vit.classifier.state_dict()
+    
+    def update_model(self, avg_prompts, avg_classifier):
+        self.model.prompts.data = copy.deepcopy(avg_prompts)
+        self.model.vit.classifier.load_state_dict(avg_classifier)
+            
+
+
+
+class Server:
+    def __init__(self, model):
+        self.model = model
+
+    def aggregate(self, client_updates):
+        # Aggregate prompts
+        prompts_updates = [update[0] for update in client_updates]
+        avg_prompts = torch.mean(torch.stack(prompts_updates), dim=0)
         
-        return self.model.state_dict()
+
+        # Aggregate classifier
+        classifier_updates = [update[1] for update in client_updates]
+        avg_classifier = {key: torch.mean(torch.stack([update[key] for update in classifier_updates]), dim=0) for key in classifier_updates[0]}
+        print(prompts_updates)
+        print(avg_prompts)
+        print(avg_classifier)
+        # Update global model
+        self.model.prompts.data = avg_prompts
+        self.model.vit.classifier.load_state_dict(avg_classifier)
+
+        return avg_prompts, avg_classifier
+
+    def distribute_model(self, clients, avg_prompts, avg_classifier):
+        for client in clients:
+            client.update_model(avg_prompts, avg_classifier)
+
+
+
