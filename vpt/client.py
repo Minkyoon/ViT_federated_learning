@@ -38,7 +38,7 @@ class Client:
         self.model = model
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
         self.loss_fn = loss_fn
-        self.loader = DataLoader(dataset, batch_size=64, shuffle=True)
+        self.loader = DataLoader(dataset, batch_size=32, shuffle=True)
         self.device = device
 
     def train(self, epochs):
@@ -51,12 +51,8 @@ class Client:
                 loss = self.loss_fn(output, target)
                 loss.backward()
                 self.optimizer.step()
-                client_start = self.client_id * self.model.client_prompts
-                client_end = client_start + self.model.client_prompts
 
-        return self.model.prompts.data[client_start:client_end], self.model.vit.classifier.state_dict()
-
-        
+        return self.model.prompts.data, self.model.vit.classifier.state_dict()
     
     def update_model(self, avg_prompts, avg_classifier):
         self.model.prompts.data = copy.deepcopy(avg_prompts)
@@ -70,20 +66,22 @@ class Server:
         self.model = model
 
     def aggregate(self, client_updates):
-        # 각 클라이언트의 프롬프트를 적절한 위치에 배치
-        for i, (client_prompts, _) in enumerate(client_updates):
-            client_start = i * self.model.client_prompts
-            client_end = client_start + self.model.client_prompts
-            self.model.prompts.data[client_start:client_end] = client_prompts
+        # Aggregate prompts
+        prompts_updates = [update[0] for update in client_updates]
+        avg_prompts = torch.mean(torch.stack(prompts_updates), dim=0)
+        
 
-        # 분류기 업데이트 집계
+        # Aggregate classifier
         classifier_updates = [update[1] for update in client_updates]
         avg_classifier = {key: torch.mean(torch.stack([update[key] for update in classifier_updates]), dim=0) for key in classifier_updates[0]}
-
-        # 전체 모델 업데이트
+        print(prompts_updates)
+        print(avg_prompts)
+        print(avg_classifier)
+        # Update global model
+        self.model.prompts.data = avg_prompts
         self.model.vit.classifier.load_state_dict(avg_classifier)
 
-        return self.model.prompts.data, avg_classifier
+        return avg_prompts, avg_classifier
 
     def distribute_model(self, clients, avg_prompts, avg_classifier):
         for client in clients:

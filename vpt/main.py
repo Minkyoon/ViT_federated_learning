@@ -24,16 +24,12 @@ import copy
 
 
 class CustomViTWithPrompt(nn.Module):
-    def __init__(self, num_labels, total_prompts, client_prompts, client_id=0):
+    def __init__(self, num_labels, num_prompts):
         super(CustomViTWithPrompt, self).__init__()
-        configuration = ViTConfig.from_pretrained('google/vit-base-patch16-224', num_labels=num_labels)
+        configuration = ViTConfig.from_pretrained('google/vit-base-patch16-224-in21k', num_labels=num_labels)
         self.vit = ViTForImageClassification(configuration)
-        self.total_prompts = total_prompts
-        self.client_prompts = client_prompts
-        self.client_id = client_id
-        self.prompts = nn.Parameter(torch.randn(total_prompts, configuration.hidden_size))
+        self.prompts = nn.Parameter(torch.randn(num_prompts, configuration.hidden_size))
         self.freeze_vit_parameters()
-        self.freeze_other_client_prompts()
 
     def freeze_vit_parameters(self):
         for param in self.vit.parameters():
@@ -41,60 +37,72 @@ class CustomViTWithPrompt(nn.Module):
         for param in self.vit.classifier.parameters():
             param.requires_grad = True
 
-    def freeze_other_client_prompts(self):
-        # 모든 프롬프트를 freeze
-        self.prompts.requires_grad = False
-        # 현재 클라이언트의 프롬프트만 unfreeze
-        client_start = self.client_id * self.client_prompts
-        client_end = client_start + self.client_prompts
-        self.prompts[client_start:client_end].requires_grad = True
-
     def forward(self, pixel_values):
         embeddings = self.vit.vit.embeddings(pixel_values)
         extended_embeddings = torch.cat([embeddings[:, 0:1], self.prompts.unsqueeze(0).expand(embeddings.size(0), -1, -1), embeddings[:, 1:]], dim=1)
         outputs = self.vit.vit.encoder(extended_embeddings)
         logits = self.vit.classifier(outputs[0][:, 0])
         return logits
+    
 
 # Hyperparameters
 num_clients = 5
 batch_size = 32
 learning_rate = 1e-3
-num_rounds = 50
-local_epoch=5 
+num_rounds = 50  
+local_epochs = 5
+malicious_client_ids = {0,1}  
+poison_status = "trim_real"  
+ 
+
+
+
+# 모델 성능 메트릭스 파일명 설정
+metrics_filename = f'model_performance_metrics_round{num_rounds}_epoch{local_epochs}_{poison_status}.txt'
+conf_matrix_filename = f'confusion_matrix_round{num_rounds}_{local_epochs}_{poison_status}.png'
+
+
 device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 
-# 데이터 변환 정의
+
+
 transform = transforms.Compose([
     transforms.Resize((224, 224)),  # ViT에 맞는 크기 조정
-    transforms.ToTensor(),
-    
+    transforms.ToTensor(),          # 이미지를 PyTorch 텐서로 변환
+    # 추가적인 변환들을 여기에 포함시킬 수 있습니다.
 ])
 
-# CIFAR-10 데이터셋 불러오기
-train_dataset = datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
-test_dataset = datasets.CIFAR10(root='./data', train=False, download=True, transform=transform)
+
+
+
+
+
+
+
+
+# 데이터셋 정의
+dataset_path = '/home/minkyoon/2023_federated/ViT_federated_learning/data/CUB_200_2011/images'
+original_dataset = ImageFolder(root=dataset_path, transform=transform)
 
 # 데이터셋 분할
-train_size = int(0.8 * len(train_dataset))
-valid_size = len(train_dataset) - train_size
-train_dataset, valid_dataset = random_split(train_dataset, [train_size, valid_size])
+train_dataset, valid_dataset, test_dataset = split_dataset_by_class(original_dataset, train_ratio=0.7, valid_ratio=0.1)
 
 # 클라이언트별 데이터셋 분할
+
 client_datasets = random_split(train_dataset, [len(train_dataset) // num_clients + (1 if x < len(train_dataset) % num_clients else 0) for x in range(num_clients)])
 
 # 클라이언트 서브셋 선택
 selected_subsets = random.sample(client_datasets, num_clients)
 
-class_names = ['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
+class_names = original_dataset.classes
 
-global_model = CustomViTWithPrompt(num_labels=10, total_prompts=50, client_prompts=10).to(device)
+global_model = CustomViTWithPrompt(num_labels=200, num_prompts=50).to(device)
 server = Server(global_model)
 
 # Assuming you have a way to split your dataset into subsets for each client
 
 
-clients = [Client(i, selected_subsets[i], copy.deepcopy(CustomViTWithPrompt(num_labels=10, total_prompts=30, client_prompts=10, client_id=i)).to(device), lr=1e-3, loss_fn=nn.CrossEntropyLoss(), device=device) for i in range(num_clients)]
+clients = [Client(i, selected_subsets[i], copy.deepcopy(CustomViTWithPrompt(num_labels=200, num_prompts=50)).to(device), lr=1e-3, loss_fn=nn.CrossEntropyLoss(), device=device) for i in range(num_clients)]
 
 
 
@@ -112,14 +120,14 @@ loss_fn=nn.CrossEntropyLoss(reduction='sum')
 # 훈련 루프
 # 각 라운드별 성능 평가를 위한 리스트
 round_accuracies = []
-results_folder = './results/vpt_personal_token'
+results_folder = './results/results_50prompts_split_iid_localepoch5_true'
 accuracy_log_filename = os.path.join(results_folder, 'round_accuracies.txt')
 
 if not os.path.exists(results_folder):
     os.makedirs(results_folder)
 
 for round in range(num_rounds):
-    client_updates = [client.train(epochs=local_epoch) for client in clients]
+    client_updates = [client.train(epochs=local_epochs) for client in clients]
     avg_prompts, avg_classifier = server.aggregate(client_updates)
     server.distribute_model(clients, avg_prompts, avg_classifier)
 
