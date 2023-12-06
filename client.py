@@ -38,7 +38,7 @@ class Client:
         self.model = model
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
         self.loss_fn = loss_fn
-        self.loader = DataLoader(dataset, batch_size=64, shuffle=True)
+        self.loader = DataLoader(dataset, batch_size=32, shuffle=True)
         self.device = device
 
     def train(self, epochs):

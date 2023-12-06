@@ -58,8 +58,6 @@ poison_status = "trim_real"
 
 
 # 모델 성능 메트릭스 파일명 설정
-metrics_filename = f'model_performance_metrics_round{num_rounds}_epoch{local_epochs}_{poison_status}.txt'
-conf_matrix_filename = f'confusion_matrix_round{num_rounds}_{local_epochs}_{poison_status}.png'
 
 
 device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
@@ -81,28 +79,30 @@ transform = transforms.Compose([
 
 
 # 데이터셋 정의
-dataset_path = '/home/minkyoon/2023_federated/ViT_federated_learning/data/CUB_200_2011/images'
-original_dataset = ImageFolder(root=dataset_path, transform=transform)
+# CIFAR-10 데이터셋 불러오기
+train_dataset = datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
+test_dataset = datasets.CIFAR10(root='./data', train=False, download=True, transform=transform)
 
 # 데이터셋 분할
-train_dataset, valid_dataset, test_dataset = split_dataset_by_class(original_dataset, train_ratio=0.7, valid_ratio=0.1)
+train_size = int(0.8 * len(train_dataset))
+valid_size = len(train_dataset) - train_size
+train_dataset, valid_dataset = random_split(train_dataset, [train_size, valid_size])
 
 # 클라이언트별 데이터셋 분할
-
 client_datasets = random_split(train_dataset, [len(train_dataset) // num_clients + (1 if x < len(train_dataset) % num_clients else 0) for x in range(num_clients)])
 
 # 클라이언트 서브셋 선택
 selected_subsets = random.sample(client_datasets, num_clients)
 
-class_names = original_dataset.classes
+class_names = ['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
 
-global_model = CustomViTWithPrompt(num_labels=200, num_prompts=50).to(device)
+global_model = CustomViTWithPrompt(num_labels=10, num_prompts=50 ).to(device)
 server = Server(global_model)
 
 # Assuming you have a way to split your dataset into subsets for each client
 
 
-clients = [Client(i, selected_subsets[i], copy.deepcopy(CustomViTWithPrompt(num_labels=200, num_prompts=50)).to(device), lr=1e-3, loss_fn=nn.CrossEntropyLoss(), device=device) for i in range(num_clients)]
+clients = [Client(i, selected_subsets[i], copy.deepcopy(CustomViTWithPrompt(num_labels=10, num_prompts=50)).to(device), lr=1e-3, loss_fn=nn.CrossEntropyLoss(), device=device) for i in range(num_clients)]
 
 
 
@@ -120,7 +120,7 @@ loss_fn=nn.CrossEntropyLoss(reduction='sum')
 # 훈련 루프
 # 각 라운드별 성능 평가를 위한 리스트
 round_accuracies = []
-results_folder = './results/results_50prompts_split_iid_localepoch5_true'
+results_folder = './results/cifar_50ronud_5epoch_5client'
 accuracy_log_filename = os.path.join(results_folder, 'round_accuracies.txt')
 
 if not os.path.exists(results_folder):
